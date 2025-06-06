@@ -62,7 +62,7 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
   late Animation<Offset> _slideAnimation;
 
   // Gemini API key
-  final String _geminiApiKey = 'AIzaSyAzEyJ40mUAKferC_PFLMs2DSiuvXVA3wg';
+  final String _geminiApiKey = '$APIKEY';
 
   // Gemini summary fetcher
   Future<String?> _fetchGeminiSummary(String plantName) async {
@@ -136,7 +136,7 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
     _controller.reset();
     
     final url = Uri.parse('https://api.plant.id/v3/identification');
-    final apiKey = 'uBfRtba5sdLv673mc45o4dBQ3Xn3XeMjKuR75Wj4OaglDkMh8Z';
+    final apiKey = '$APIKEY';
     final bytes = await image.readAsBytes();
     final base64Image = base64Encode(bytes);
     final body = jsonEncode({
