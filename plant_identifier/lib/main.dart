@@ -5,8 +5,13 @@ import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_test/flutter_test.dart';
 
-void main() {
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   runApp(const PlantCheckerApp());
 }
 
@@ -62,7 +67,7 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
   late Animation<Offset> _slideAnimation;
 
   // Gemini API key
-  final String _geminiApiKey = '$APIKEY';
+  final String _geminiApiKey = dotenv.env['GEMINI_API_KEY'] ?? 'default_key';
 
   // Gemini summary fetcher
   Future<String?> _fetchGeminiSummary(String plantName) async {
@@ -87,7 +92,7 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
           + e.toString());
       setState(() {
         _geminiLoading = false;
-        _geminiError = 'Could not fetch AI summary.';
+        _geminiError = 'Could not fetch AI summary. There may be a problem with the Gemini Model or the API.';
       });
       return null;
     }
@@ -136,7 +141,7 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
     _controller.reset();
     
     final url = Uri.parse('https://api.plant.id/v3/identification');
-    final apiKey = '$APIKEY';
+    final apiKey = dotenv.env['PLANTID_API_KEY'] ?? 'default_key';
     final bytes = await image.readAsBytes();
     final base64Image = base64Encode(bytes);
     final body = jsonEncode({

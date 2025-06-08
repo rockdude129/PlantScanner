@@ -5,6 +5,7 @@
 *.swp
 .DS_Store
 .atom/
+.env/
 .build/
 .buildlog/
 .history
@@ -43,3 +44,4 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+.env*
