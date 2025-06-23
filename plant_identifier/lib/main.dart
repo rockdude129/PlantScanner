@@ -21,14 +21,18 @@ class PlantCheckerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Plant Checker AI',
+      title: 'PlantScanner AI',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1B5E20),
-          primary: const Color(0xFF1B5E20),
-          secondary: const Color(0xFF81C784),
-          background: const Color(0xFFF5F7FA),
-          surface: Colors.white,
+          seedColor: const Color(0xFF558B2F),
+          primary: const Color(0xFF558B2F),
+          secondary: const Color(0xFF8BC34A),
+          background: const Color(0xFFFDF6E3),
+          surface: const Color(0xFFFFFBF2),
+          onPrimary: Colors.white,
+          onSecondary: Colors.white,
+          onBackground: const Color(0xFF3E2723),
+          onSurface: const Color(0xFF3E2723),
         ),
         useMaterial3: true,
         fontFamily: 'Poppins',
@@ -65,6 +69,12 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
+  
+  // Follow-up questions feature
+  final TextEditingController _questionController = TextEditingController();
+  final List<Map<String, String>> _conversation = [];
+  bool _askingQuestion = false;
+  String? _currentPlantName;
 
   // Gemini API key
   final String _geminiApiKey = dotenv.env['GEMINI_API_KEY'] ?? 'default_key';
@@ -98,6 +108,51 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
     }
   }
 
+  // Follow-up question handler
+  Future<void> _askFollowUpQuestion(String question) async {
+    if (question.trim().isEmpty || _currentPlantName == null) return;
+    
+    setState(() {
+      _askingQuestion = true;
+    });
+    
+    // Add user question to conversation
+    _conversation.add({
+      'type': 'user',
+      'message': question,
+    });
+    
+    final model = GenerativeModel(
+      model: 'gemini-1.5-flash',
+      apiKey: _geminiApiKey,
+    );
+    
+    // Create context-aware prompt
+    final prompt = 'You are a helpful plant expert. The user has identified a plant called "$_currentPlantName" and is asking a follow-up question. Please provide a helpful, accurate, and friendly answer about this specific plant. Keep your response concise but informative.\n\nUser question: $question';
+    
+    try {
+      final content = await model.generateContent([Content.text(prompt)]);
+      final response = content.text ?? 'Sorry, I couldn\'t generate a response.';
+      
+      // Add AI response to conversation
+      _conversation.add({
+        'type': 'ai',
+        'message': response,
+      });
+    } catch (e) {
+      print('Gemini follow-up error: ${e.toString()}');
+      _conversation.add({
+        'type': 'ai',
+        'message': 'Sorry, I encountered an error while processing your question. Please try again.',
+      });
+    } finally {
+      setState(() {
+        _askingQuestion = false;
+      });
+      _questionController.clear();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -117,6 +172,7 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
   @override
   void dispose() {
     _controller.dispose();
+    _questionController.dispose();
     super.dispose();
   }
 
@@ -127,6 +183,7 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
       setState(() {
         _image = File(pickedFile.path);
         _result = null;
+        _conversation.clear(); // Clear previous conversation
       });
       _identifyPlant(_image!);
     }
@@ -140,40 +197,63 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
     });
     _controller.reset();
     
-    final url = Uri.parse('https://api.plant.id/v3/identification');
-    final apiKey = dotenv.env['PLANTID_API_KEY'] ?? 'default_key';
-    final bytes = await image.readAsBytes();
-    final base64Image = base64Encode(bytes);
-    final body = jsonEncode({
-      'images': [base64Image],
-      'classification_level': 'all'
-    });
+    final apiKey = dotenv.env['PLANTNET_API_KEY'] ?? 'default_key';
+    final project = 'all'; // Use 'all' for all floras
+    final url = Uri.parse('https://my-api.plantnet.org/v2/identify/$project?api-key=$apiKey');
+    
     try {
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Api-Key': apiKey,
-        },
-        body: body,
-      );
+      // Create multipart request for Pl@ntNet API
+      var request = http.MultipartRequest('POST', url);
+      
+      // Add the image file
+      request.files.add(await http.MultipartFile.fromPath(
+        'images',
+        image.path,
+      ));
+      
+      // Add organs parameter (auto-detect)
+      request.fields['organs'] = 'auto';
+      
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+      
+      if (response.statusCode != 200) {
+        print('Pl@ntNet API error: ${response.statusCode} - ${response.body}');
+        setState(() {
+          _result = 'Error identifying plant. Please check your API key.';
+          _geminiSummary = null;
+        });
+        return;
+      }
+      
       final data = jsonDecode(response.body);
-      final suggestions = data['result']?['classification']?['suggestions'];
-      if (suggestions != null && suggestions.isNotEmpty) {
-        suggestions.sort((a, b) => (b['probability'] as num).compareTo(a['probability'] as num));
-        final plant = suggestions[0];
-        final probability = (plant['probability'] as num) * 100;
-        if (probability < 20) {
+      print('Pl@ntNet response: $data'); // Debug log
+      
+      final results = data['results'] as List?;
+      if (results != null && results.isNotEmpty) {
+        // Sort by score (confidence)
+        results.sort((a, b) => (b['score'] as num).compareTo(a['score'] as num));
+        final plant = results[0];
+        final score = (plant['score'] as num) * 100;
+        
+        // Extract plant name from the species object
+        final species = plant['species'];
+        final plantName = species['commonNames']?.first ?? 
+                         species['scientificNameWithoutAuthor'] ?? 
+                         'Unknown Plant';
+        
+        if (score < 20) {
           setState(() {
             _result = 'No plant identified.';
             _geminiSummary = null;
+            _currentPlantName = null;
           });
         } else {
-          final plantName = plant['name'];
           setState(() {
-            _result = '$plantName (Probability: ${probability.toStringAsFixed(2)}%)';
+            _result = '$plantName (Confidence: ${score.toStringAsFixed(2)}%)';
             _geminiSummary = null;
             _geminiError = null;
+            _currentPlantName = plantName; // Store for follow-up questions
           });
           // Fetch Gemini summary
           final summary = await _fetchGeminiSummary(plantName);
@@ -188,8 +268,9 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
         });
       }
     } catch (e) {
+      print('Pl@ntNet API error: ${e.toString()}');
       setState(() {
-        _result = 'No plant identified.';
+        _result = 'No plant has been identified!';
         _geminiSummary = null;
       });
     } finally {
@@ -205,12 +286,29 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.background,
       appBar: AppBar(
-        title: const Text(
-          'Plant Checker AI',
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            fontSize: 24,
-            letterSpacing: -0.5,
+        title: Padding(
+          padding: const EdgeInsets.only(top: 8.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8.0),
+                child: Image.asset(
+                  'assets/images/app_logo.png',
+                  width: 32,
+                  height: 32,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Text(
+                'PlantScanner AI',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 26,
+                ),
+              ),
+            ],
           ),
         ),
         centerTitle: true,
@@ -274,7 +372,7 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
                   Container(
                     padding: const EdgeInsets.all(24),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(24),
                       boxShadow: [
                         BoxShadow(
@@ -339,17 +437,17 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
                         width: double.infinity,
                         padding: const EdgeInsets.all(28),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: Theme.of(context).colorScheme.surface,
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF1B5E20).withOpacity(0.08),
+                              color: Theme.of(context).colorScheme.primary.withOpacity(0.08),
                               blurRadius: 20,
                               offset: const Offset(0, 10),
                             ),
                           ],
                           border: Border.all(
-                            color: const Color(0xFF1B5E20).withOpacity(0.1),
+                            color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
                             width: 1.5,
                           ),
                         ),
@@ -418,14 +516,14 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
                               Container(
                                 padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFe8f5e9),
+                                  color: Theme.of(context).colorScheme.primary.withOpacity(0.05),
                                   borderRadius: BorderRadius.circular(16),
                                 ),
                                 child: Text(
                                   _geminiSummary!,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 16,
-                                    color: Color(0xFF388E3C),
+                                    color: Theme.of(context).colorScheme.primary,
                                     fontWeight: FontWeight.w500,
                                     height: 1.5,
                                     fontFamily: null,
@@ -433,6 +531,142 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
                                   textAlign: TextAlign.center,
                                 ),
                               ),
+                            
+                            // Follow-up questions section
+                            if (_currentPlantName != null && _geminiSummary != null) ...[
+                              const SizedBox(height: 20),
+                              Divider(color: Color(0xFF1B5E20).withOpacity(0.15)),
+                              const SizedBox(height: 12),
+                              
+                              // Conversation history
+                              if (_conversation.isNotEmpty) ...[
+                                Container(
+                                  height: 200,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.02),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: Colors.black.withOpacity(0.05)),
+                                  ),
+                                  child: ListView.builder(
+                                    padding: const EdgeInsets.all(12),
+                                    itemCount: _conversation.length,
+                                    itemBuilder: (context, index) {
+                                      final message = _conversation[index];
+                                      final isUser = message['type'] == 'user';
+                                      
+                                      return Container(
+                                        margin: const EdgeInsets.only(bottom: 8),
+                                        child: Row(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            if (isUser) const Spacer(),
+                                            Flexible(
+                                              child: Container(
+                                                padding: const EdgeInsets.all(12),
+                                                decoration: BoxDecoration(
+                                                  color: isUser
+                                                      ? Theme.of(context).colorScheme.primary
+                                                      : Colors.white,
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: Colors.black.withOpacity(0.04),
+                                                      blurRadius: 8,
+                                                      offset: const Offset(0, 4),
+                                                    )
+                                                  ]
+                                                ),
+                                                child: Text(
+                                                  message['message']!,
+                                                  style: TextStyle(
+                                                    color: isUser 
+                                                      ? Colors.white
+                                                      : Colors.black87,
+                                                    fontSize: 14,
+                                                    height: 1.4,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            if (!isUser) const Spacer(),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                              ],
+                              
+                              // Question input
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(color: Colors.grey[300]!),
+                                      ),
+                                      child: TextField(
+                                        controller: _questionController,
+                                        decoration: InputDecoration(
+                                          hintText: 'Ask a question about $_currentPlantName...',
+                                          hintStyle: TextStyle(color: Colors.grey[500]),
+                                          border: InputBorder.none,
+                                          contentPadding: const EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical: 12,
+                                          ),
+                                        ),
+                                        onSubmitted: (value) {
+                                          if (value.trim().isNotEmpty) {
+                                            _askFollowUpQuestion(value);
+                                          }
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF1B5E20),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: IconButton(
+                                      icon: _askingQuestion
+                                        ? const SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                            ),
+                                          )
+                                        : const Icon(Icons.send, color: Colors.white),
+                                      onPressed: _askingQuestion
+                                        ? null
+                                        : () {
+                                            if (_questionController.text.trim().isNotEmpty) {
+                                              _askFollowUpQuestion(_questionController.text);
+                                            }
+                                          },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              
+                              const SizedBox(height: 8),
+                              Text(
+                                'Ask follow-up questions about care, growth, or any plant-related topics!',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                  fontStyle: FontStyle.italic,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
                           ],
                         ),
                       ),
@@ -455,13 +689,20 @@ class _PlantCheckerHomePageState extends State<PlantCheckerHomePage> with Single
   }) {
     return Container(
       decoration: BoxDecoration(
-        gradient: gradient,
+        gradient: LinearGradient(
+          colors: [
+            Theme.of(context).colorScheme.primary,
+            Theme.of(context).colorScheme.secondary,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF1B5E20).withOpacity(0.2),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
+            color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
