@@ -19,4 +19,4 @@ Demo - https://www.youtube.com/shorts/Oedny0KzoJI
 OFFICIAL PLAY STORE RELEASE - Coming Soon
 
 ## Highly Risky (Not Recommended At All) ❌❌❌
-Alpha Release - https://github.com/rockdude129/PlantScanner/releases/download/alpha/app-debug.apk
+Check releases.
